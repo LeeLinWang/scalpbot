@@ -13,9 +13,9 @@ import requests
 from playwright.sync_api import sync_playwright
 
 # ─── CONFIG (set these as Railway environment variables) ─────────────────────
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8703426074:AAGTYOuqa5-Yhk2OupdJRS6DsLj4DPC-pCU")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "422331755")
-WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "scalpmark1")       # optional auth
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "")       # optional auth
 PORT               = int(os.environ.get("PORT", 5000))
 
 # TradingView chart URLs per pair (1M, Heikin Ashi, 100 EMA)
