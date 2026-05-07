@@ -1,0 +1,8 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "playwright install chromium && gunicorn server:app --bind 0.0.0.0:$PORT --workers 1 --timeout 60"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"

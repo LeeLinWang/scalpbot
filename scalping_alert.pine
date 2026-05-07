@@ -1,0 +1,129 @@
+//@version=5
+indicator("HA Scalp Setup — 100 EMA", overlay=true)
+
+// ─── INPUTS ───────────────────────────────────────────────────────────────────
+webhookUrl = input.string("", "Webhook URL (unused in Pine — set in Alert)")
+emaLen     = input.int(100, "EMA Length")
+
+// ─── 100 EMA on close ─────────────────────────────────────────────────────────
+ema100 = ta.ema(close, emaLen)
+plot(ema100, color=color.yellow, linewidth=2, title="100 EMA")
+
+// ─── HEIKIN ASHI VALUES ───────────────────────────────────────────────────────
+// Pine's built-in HA values when chart is set to Heikin Ashi
+// If running on a standard candle chart, compute manually:
+ha_close = (open + high + low + close) / 4
+ha_open  = ta.sma(open, 1)  // placeholder — set chart to HA mode for accuracy
+
+// Use chart source directly (assumes chart is set to Heikin Ashi)
+ha_o = open
+ha_h = high
+ha_l = low
+ha_c = close
+
+// ─── CANDLE PROPERTIES ────────────────────────────────────────────────────────
+body(o, c)       => math.abs(c - o)
+range_(h, l)     => h - l
+upperWick(o, c, h) => h - math.max(o, c)
+lowerWick(o, c, l) => math.min(o, c) - l
+
+bodyRatio(o, c, h, l) =>
+    r = range_(h, l)
+    r == 0 ? 0.0 : body(o, c) / r
+
+upperWickRatio(o, c, h, l) =>
+    r = range_(h, l)
+    r == 0 ? 0.0 : upperWick(o, c, h) / r
+
+lowerWickRatio(o, c, h, l) =>
+    r = range_(h, l)
+    r == 0 ? 0.0 : lowerWick(o, c, l) / r
+
+// ─── CANDLE TYPE CHECKS ───────────────────────────────────────────────────────
+
+// Bearish candle with NO upper shadow (for buy pullback)
+isBearishNoUpperShadow(o, c, h, l) =>
+    c < o and
+    upperWick(o, c, h) == 0.0  // or < 0.0001 for float tolerance
+
+// Bullish candle with NO lower shadow (for sell pullback)
+isBullishNoLowerShadow(o, c, h, l) =>
+    c > o and
+    lowerWick(o, c, l) == 0.0
+
+// Long-legged doji (bullish): body 5–30%, both wicks ≥ 10%, bullish close
+isBullishDoji(o, c, h, l) =>
+    br = bodyRatio(o, c, h, l)
+    ur = upperWickRatio(o, c, h, l)
+    lr = lowerWickRatio(o, c, h, l)
+    c >= o and          // bullish (green)
+    br >= 0.05 and
+    br <= 0.30 and
+    ur >= 0.10 and
+    lr >= 0.10
+
+// Long-legged doji (bearish): body 5–30%, both wicks ≥ 10%, bearish close
+isBearishDoji(o, c, h, l) =>
+    br = bodyRatio(o, c, h, l)
+    ur = upperWickRatio(o, c, h, l)
+    lr = lowerWickRatio(o, c, h, l)
+    c < o and           // bearish (red)
+    br >= 0.05 and
+    br <= 0.30 and
+    ur >= 0.10 and
+    lr >= 0.10
+
+// ─── CURRENT & LOOKBACK CANDLES ───────────────────────────────────────────────
+// Current candle (bar 0)
+cur_o = ha_o; cur_c = ha_c; cur_h = ha_h; cur_l = ha_l
+
+// Previous 2 candles
+p1_o = ha_o[1]; p1_c = ha_c[1]; p1_h = ha_h[1]; p1_l = ha_l[1]
+p2_o = ha_o[2]; p2_c = ha_c[2]; p2_h = ha_h[2]; p2_l = ha_l[2]
+
+// ─── BUY SETUP ────────────────────────────────────────────────────────────────
+// 1. Entire current candle above 100 EMA
+aboveEma = ha_l > ema100
+
+// 2. Previous 2 candles are bearish with no upper shadow
+prev2BearishNoTop =
+     isBearishNoUpperShadow(p1_o, p1_c, p1_h, p1_l) and
+     isBearishNoUpperShadow(p2_o, p2_c, p2_h, p2_l)
+
+// 3. Current candle is bullish long-legged doji
+curBullishDoji = isBullishDoji(cur_o, cur_c, cur_h, cur_l)
+
+// 4. Doji range > at least one of the two preceding candles
+dojiRange    = range_(cur_h, cur_l)
+p1Range      = range_(p1_h, p1_l)
+p2Range      = range_(p2_h, p2_l)
+dojiLargerBuy = dojiRange > p1Range or dojiRange > p2Range
+
+buySignal = aboveEma and prev2BearishNoTop and curBullishDoji and dojiLargerBuy
+
+// ─── SELL SETUP ───────────────────────────────────────────────────────────────
+// 1. Entire current candle below 100 EMA
+belowEma = ha_h < ema100
+
+// 2. Previous 2 candles are bullish with no lower shadow
+prev2BullishNoBottom =
+     isBullishNoLowerShadow(p1_o, p1_c, p1_h, p1_l) and
+     isBullishNoLowerShadow(p2_o, p2_c, p2_h, p2_l)
+
+// 3. Current candle is bearish long-legged doji
+curBearishDoji = isBearishDoji(cur_o, cur_c, cur_h, cur_l)
+
+// 4. Doji range > at least one of the two preceding candles
+dojiLargerSell = dojiRange > p1Range or dojiRange > p2Range
+
+sellSignal = belowEma and prev2BullishNoBottom and curBearishDoji and dojiLargerSell
+
+// ─── PLOTS ────────────────────────────────────────────────────────────────────
+plotshape(buySignal,  title="BUY",  style=shape.labelup,   location=location.belowbar, color=color.new(color.lime, 0),  textcolor=color.black, text="BUY",  size=size.normal)
+plotshape(sellSignal, title="SELL", style=shape.labeldown, location=location.abovebar, color=color.new(color.red,  0),  textcolor=color.white, text="SELL", size=size.normal)
+
+// ─── ALERT CONDITIONS ─────────────────────────────────────────────────────────
+// Set these as alerts in TradingView with webhook URL
+// Message format consumed by your Python server
+alertcondition(buySignal,  title="BUY Signal",  message='{"pair":"{{ticker}}","signal":"BUY","price":"{{close}}","time":"{{time}}"}')
+alertcondition(sellSignal, title="SELL Signal", message='{"pair":"{{ticker}}","signal":"SELL","price":"{{close}}","time":"{{time}}"}')
