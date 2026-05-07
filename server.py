@@ -1,6 +1,5 @@
 """
 Forex Scalp Alert Server - Text Only
-Receives TradingView webhooks → sends Telegram text alert
 """
 
 import os
@@ -10,8 +9,8 @@ from flask import Flask, request, jsonify
 import requests
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
-WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "")
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "422331755")
+WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "scalpmark1")
 PORT               = int(os.environ.get("PORT", 5000))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -56,7 +55,7 @@ def webhook():
 
     log.info(f"Signal received: {signal} on {pair} @ {price}")
 
-    emoji  = "🟢" if signal == "BUY" else "🔴"
+    emoji   = "🟢" if signal == "BUY" else "🔴"
     tv_link = f"https://www.tradingview.com/chart/?symbol=FX:{pair}&interval=1"
     message = (
         f"{emoji} <b>{signal} — {pair}</b>\n"
@@ -81,4 +80,3 @@ def health():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
-
