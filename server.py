@@ -10,7 +10,6 @@ import requests
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "422331755")
-WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "scalpmark1")
 PORT               = int(os.environ.get("PORT", 5000))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -21,7 +20,7 @@ app = Flask(__name__)
 
 def send_telegram_text(text: str) -> bool:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    log.info(f"Sending to chat_id={TELEGRAM_CHAT_ID} via token={TELEGRAM_BOT_TOKEN[:10]}...")
+    log.info(f"Sending to chat_id={TELEGRAM_CHAT_ID}")
     try:
         resp = requests.post(
             url,
@@ -38,17 +37,13 @@ def send_telegram_text(text: str) -> bool:
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    if WEBHOOK_SECRET:
-        incoming = request.headers.get("X-Webhook-Secret", "")
-        if incoming != WEBHOOK_SECRET:
-            return jsonify({"error": "unauthorized"}), 401
-
+    # No secret check — TradingView does not support custom headers
     try:
         data = request.get_json(force=True)
     except Exception:
         return jsonify({"error": "invalid JSON"}), 400
 
-    pair   = data.get("pair", "UNKNOWN").upper().replace("FX:", "").replace(":", "")
+    pair   = data.get("pair", "UNKNOWN").upper().replace("FX:", "").replace("OANDA:", "").replace(":", "")
     signal = data.get("signal", "?").upper()
     price  = data.get("price", "?")
     time_  = data.get("time", datetime.utcnow().isoformat())
