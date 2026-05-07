@@ -1,35 +1,29 @@
 """
 Forex Scalp Alert Server
-Receives TradingView webhooks → grabs chart screenshot → sends Telegram message
+Receives TradingView webhooks → sends Telegram message with chart image
+Uses TradingView's snapshot API (no Playwright needed)
 """
 
 import os
 import json
-import asyncio
 import logging
 from datetime import datetime
 from flask import Flask, request, jsonify
 import requests
-from playwright.sync_api import sync_playwright
 
-# ─── CONFIG (set these as Railway environment variables) ─────────────────────
+# ─── CONFIG ──────────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
-WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "")       # optional auth
+WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "")
 PORT               = int(os.environ.get("PORT", 5000))
 
-# TradingView chart URLs per pair (1M, Heikin Ashi, 100 EMA)
-# Replace these with your actual saved chart URLs from TradingView
-TV_CHART_URLS = {
-    "EURUSD":  "https://www.tradingview.com/chart/?symbol=EURUSD&interval=1",
-    "GBPUSD":  "https://www.tradingview.com/chart/?symbol=GBPUSD&interval=1",
-    "USDJPY":  "https://www.tradingview.com/chart/?symbol=USDJPY&interval=1",
-    "AUDUSD":  "https://www.tradingview.com/chart/?symbol=AUDUSD&interval=1",
-    # FX broker prefixes TradingView may use:
-    "FX:EURUSD": "https://www.tradingview.com/chart/?symbol=FX:EURUSD&interval=1",
-    "FX:GBPUSD": "https://www.tradingview.com/chart/?symbol=FX:GBPUSD&interval=1",
-    "FX:USDJPY": "https://www.tradingview.com/chart/?symbol=FX:USDJPY&interval=1",
-    "FX:AUDUSD": "https://www.tradingview.com/chart/?symbol=FX:AUDUSD&interval=1",
+# TradingView chart symbol map for snapshot API
+# Format: exchange:symbol
+TV_SYMBOLS = {
+    "EURUSD":  "FX:EURUSD",
+    "GBPUSD":  "FX:GBPUSD",
+    "USDJPY":  "FX:USDJPY",
+    "AUDUSD":  "FX:AUDUSD",
 }
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -38,44 +32,56 @@ log = logging.getLogger(__name__)
 app = Flask(__name__)
 
 
-# ─── SCREENSHOT ───────────────────────────────────────────────────────────────
+# ─── CHART IMAGE ─────────────────────────────────────────────────────────────
 
-def take_screenshot(pair: str) -> bytes | None:
+def get_chart_image(pair: str) -> bytes | None:
     """
-    Uses Playwright to open the TradingView chart and take a screenshot.
+    Fetches a chart snapshot from TradingView's public snapshot API.
     Returns PNG bytes or None on failure.
     """
-    # Normalize pair key
-    url = TV_CHART_URLS.get(pair) or TV_CHART_URLS.get(pair.replace("FX:", "").replace(":", ""))
-    if not url:
-        log.warning(f"No chart URL configured for pair: {pair}")
-        return None
+    symbol = TV_SYMBOLS.get(pair, f"FX:{pair}")
+
+    # TradingView mini chart snapshot — no auth needed
+    url = (
+        f"https://charts.tradingview.com/mini-symbol-overview"
+        f"?symbol={symbol}"
+        f"&interval=1m"
+        f"&theme=dark"
+        f"&width=800"
+        f"&height=400"
+    )
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
 
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox"]
-            )
-            page = browser.new_page(viewport={"width": 1400, "height": 800})
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            # Wait for chart to render
-            page.wait_for_timeout(4000)
-            # Hide UI chrome if possible
-            page.evaluate("""
-                () => {
-                    // Hide top bar and sidebars for clean chart
-                    const els = document.querySelectorAll(
-                        '.tv-header, .tv-side-toolbar, .layout__area--left'
-                    );
-                    els.forEach(el => el.style.display = 'none');
-                }
-            """)
-            screenshot = page.screenshot(type="png")
-            browser.close()
-            return screenshot
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image"):
+            return resp.content
+        else:
+            log.warning(f"TV snapshot returned {resp.status_code} for {pair}")
+            return None
     except Exception as e:
-        log.error(f"Screenshot failed for {pair}: {e}")
+        log.error(f"Chart image fetch failed: {e}")
+        return None
+
+
+def get_chart_image_v2(pair: str) -> bytes | None:
+    """
+    Alternative: use TradingView's widget screenshot endpoint
+    """
+    symbol = TV_SYMBOLS.get(pair, f"FX:{pair}")
+
+    url = f"https://s3.tradingview.com/snapshots/s/{symbol.replace(':', '_')}.png"
+
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            return resp.content
+        return None
+    except Exception as e:
+        log.error(f"Chart image v2 failed: {e}")
         return None
 
 
@@ -91,6 +97,7 @@ def send_telegram_photo(image_bytes: bytes, caption: str) -> bool:
             timeout=15
         )
         resp.raise_for_status()
+        log.info("Telegram photo sent successfully")
         return True
     except Exception as e:
         log.error(f"Telegram sendPhoto failed: {e}")
@@ -106,6 +113,7 @@ def send_telegram_text(text: str) -> bool:
             timeout=10
         )
         resp.raise_for_status()
+        log.info("Telegram text sent successfully")
         return True
     except Exception as e:
         log.error(f"Telegram sendMessage failed: {e}")
@@ -120,6 +128,7 @@ def webhook():
     if WEBHOOK_SECRET:
         incoming = request.headers.get("X-Webhook-Secret", "")
         if incoming != WEBHOOK_SECRET:
+            log.warning("Unauthorized webhook attempt")
             return jsonify({"error": "unauthorized"}), 401
 
     try:
@@ -127,30 +136,33 @@ def webhook():
     except Exception:
         return jsonify({"error": "invalid JSON"}), 400
 
-    pair   = data.get("pair", "UNKNOWN").upper().replace("FX:", "").replace(":", "")
-    signal = data.get("signal", "?").upper()
-    price  = data.get("price", "?")
-    time_  = data.get("time", datetime.utcnow().isoformat())
+    # Normalize pair — strip FX: prefix and colons
+    raw_pair = data.get("pair", "UNKNOWN").upper()
+    pair     = raw_pair.replace("FX:", "").replace(":", "").replace("_", "")
+    signal   = data.get("signal", "?").upper()
+    price    = data.get("price", "?")
+    time_    = data.get("time", datetime.utcnow().isoformat())
 
     log.info(f"Signal received: {signal} on {pair} @ {price}")
 
     # Build caption
-    emoji  = "🟢" if signal == "BUY" else "🔴"
+    emoji   = "🟢" if signal == "BUY" else "🔴"
+    tv_link = f"https://www.tradingview.com/chart/?symbol=FX:{pair}&interval=1"
     caption = (
-        f"{emoji} <b>{signal} SIGNAL — {pair}</b>\n"
-        f"Price: <code>{price}</code>\n"
-        f"Time: <code>{time_}</code>\n"
-        f"TF: 1M | Setup: HA Scalp | EMA100"
+        f"{emoji} <b>{signal} — {pair}</b>\n"
+        f"💰 Price: <code>{price}</code>\n"
+        f"🕐 Time: <code>{time_}</code>\n"
+        f"📊 TF: 1M | HA Scalp | EMA100\n"
+        f"🔗 <a href='{tv_link}'>Open Chart</a>"
     )
 
-    # Take screenshot
-    screenshot = take_screenshot(pair)
+    # Try to get chart image
+    image = get_chart_image(pair) or get_chart_image_v2(pair)
 
-    if screenshot:
-        ok = send_telegram_photo(screenshot, caption)
+    if image:
+        ok = send_telegram_photo(image, caption)
     else:
-        # Fallback: text-only alert
-        log.warning("No screenshot — sending text alert only")
+        log.warning(f"No chart image available for {pair} — sending text alert")
         ok = send_telegram_text(caption + "\n\n⚠️ <i>Chart screenshot unavailable</i>")
 
     if ok:
